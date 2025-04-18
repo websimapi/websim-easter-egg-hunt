@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Easter Egg Hunt</title>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/"
+      }
+    }
+  </script>
+  <style>
+    body { 
+      margin: 0;
+      overflow: hidden;
+      font-family: Arial, sans-serif;
+      color: #333;
+    }
+    #game-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+    }
+    #ui-container {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 10;
+      pointer-events: none;
+    }
+    .panel {
+      background-color: rgba(255, 255, 255, 0.8);
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 10px;
+      pointer-events: auto;
+    }
+    #leaderboard {
+      width: 250px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    #egg-creator {
+      width: 300px;
+      display: none;
+    }
+    .btn {
+      background-color: #4CAF50;
+      border: none;
+      color: white;
+      padding: 10px 15px;
+      text-align: center;
+      text-decoration: none;
+      display: inline-block;
+      font-size: 14px;
+      margin: 4px 2px;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    #create-egg-btn {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      z-index: 10;
+    }
+    #hide-egg-btn {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      z-index: 10;
+      display: none;
+    }
+    .loading {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid rgba(255,255,255,.3);
+      border-radius: 50%;
+      border-top-color: #fff;
+      animation: spin 1s ease-in-out infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    #egg-preview {
+      width: 100%;
+      height: 150px;
+      background-color: #f0f0f0;
+      border-radius: 4px;
+      margin-top: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .egg-image {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
+    #notification {
+      position: absolute;
+      top: 80px;
+      left: 50%;
+      transform: translateX(-50%);
+      background-color: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 10px 20px;
+      border-radius: 20px;
+      font-size: 18px;
+      opacity: 0;
+      transition: opacity 0.3s;
+      z-index: 100;
+    }
+  </style>
+</head>
+<body>
+  <div id="game-container"></div>
+  
+  <div id="ui-container">
+    <div class="panel" id="leaderboard">
+      <h3>Egg Hunt Leaderboard</h3>
+      <div id="leaderboard-content"></div>
+    </div>
+  </div>
+  
+  <div id="egg-creator" class="panel">
+    <h3>Create an Easter Egg</h3>
+    <input type="text" id="egg-prompt" placeholder="Describe your egg texture" style="width: 100%; padding: 8px; margin-bottom: 10px;">
+    <button id="generate-texture-btn" class="btn">Generate Texture</button>
+    <div id="egg-preview">
+      <span>Your egg texture will appear here</span>
+    </div>
+    <button id="save-egg-btn" class="btn" style="margin-top: 10px; display: none;">Save Egg</button>
+    <button id="cancel-egg-btn" class="btn" style="margin-top: 10px; background-color: #f44336;">Cancel</button>
+  </div>
+  
+  <button id="create-egg-btn" class="btn">Create Egg</button>
+  <button id="hide-egg-btn" class="btn">Hide Egg</button>
+  
+  <div id="notification"></div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    
+    // Initialize room and database connection
+    const room = new WebsimSocket();
+    await room.initialize();
+    
+    // Game state
+    const gameState = {
+      eggs: [],
+      currentEgg: null,
+      selectedEgg: null,
+      isPlacingEgg: false,
+      scores: {}
+    };
+    
+    // Three.js setup
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setClearColor(0x87ceeb); // Sky blue background
+    document.getElementById('game-container').appendChild(renderer.domElement);
+    
+    // Controls setup
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    
+    // Camera initial position
+    camera.position.set(0, 5, 10);
+    controls.update();
+    
+    // Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambientLight);
+    
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    directionalLight.position.set(10, 20, 10);
+    scene.add(directionalLight);
+    
+    // Create ground
+    const groundGeometry = new THREE.PlaneGeometry(50, 50);
+    const groundMaterial = new THREE.MeshStandardMaterial({ 
+      color: 0x8bc34a,
+      roughness: 0.8,
+      metalness: 0.2
+    });
+    const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.5;
+    scene.add(ground);
+    
+    // Add some decorative elements
+    function addDecorations() {
+      // Trees
+      for(let i = 0; i < 15; i++) {
+        const treeHeight = 2 + Math.random() * 3;
+        const treeGeometry = new THREE.ConeGeometry(1, treeHeight, 8);
+        const treeMaterial = new THREE.MeshStandardMaterial({ color: 0x2e7d32 });
+        const tree = new THREE.Mesh(treeGeometry, treeMaterial);
+        
+        const trunkGeometry = new THREE.CylinderGeometry(0.2, 0.2, treeHeight/2);
+        const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x5d4037 });
+        const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+        
+        const x = Math.random() * 40 - 20;
+        const z = Math.random() * 40 - 20;
+        
+        tree.position.set(x, treeHeight/2, z);
+        trunk.position.set(x, -treeHeight/4, z);
+        
+        scene.add(tree);
+        scene.add(trunk);
+      }
+      
+      // Rocks
+      for(let i = 0; i < 20; i++) {
+        const rockSize = 0.3 + Math.random() * 0.7;
+        const rockGeometry = new THREE.DodecahedronGeometry(rockSize, 0);
+        const rockMaterial = new THREE.MeshStandardMaterial({ 
+          color: 0x808080,
+          roughness: 0.9
+        });
+        const rock = new THREE.Mesh(rockGeometry, rockMaterial);
+        
+        const x = Math.random() * 40 - 20;
+        const z = Math.random() * 40 - 20;
+        
+        rock.position.set(x, rockSize/2 - 0.5, z);
+        rock.rotation.set(Math.random(), Math.random(), Math.random());
+        
+        scene.add(rock);
+      }
+    }
+    
+    addDecorations();
+    
+    // Egg creation functions
+    async function createEggModel(textureUrl) {
+      const geometry = new THREE.SphereGeometry(0.5, 32, 32);
+      
+      // Create texture loader
+      const textureLoader = new THREE.TextureLoader();
+      
+      // Load the texture
+      const texture = await new Promise((resolve) => {
+        textureLoader.load(textureUrl, (tex) => {
+          tex.wrapS = THREE.RepeatWrapping;
+          tex.wrapT = THREE.RepeatWrapping;
+          resolve(tex);
+        });
+      });
+      
+      const material = new THREE.MeshStandardMaterial({ 
+        map: texture,
+        roughness: 0.3,
+        metalness: 0.2
+      });
+      
+      const egg = new THREE.Mesh(geometry, material);
+      
+      // Make egg more egg-shaped
+      egg.scale.y = 1.4;
+      
+      return egg;
+    }
+    
+    // UI Functionality
+    const createEggBtn = document.getElementById('create-egg-btn');
+    const hideEggBtn = document.getElementById('hide-egg-btn');
+    const eggCreator = document.getElementById('egg-creator');
+    const eggPrompt = document.getElementById('egg-prompt');
+    const generateTextureBtn = document.getElementById('generate-texture-btn');
+    const saveEggBtn = document.getElementById('save-egg-btn');
+    const cancelEggBtn = document.getElementById('cancel-egg-btn');
+    const eggPreview = document.getElementById('egg-preview');
+    
+    createEggBtn.addEventListener('click', () => {
+      eggCreator.style.display = 'block';
+    });
+    
+    cancelEggBtn.addEventListener('click', () => {
+      eggCreator.style.display = 'none';
+      eggPreview.innerHTML = '<span>Your egg texture will appear here</span>';
+      eggPrompt.value = '';
+      saveEggBtn.style.display = 'none';
+    });
+    
+    generateTextureBtn.addEventListener('click', async () => {
+      if (!eggPrompt.value.trim()) {
+        showNotification('Please enter a description for your egg texture.');
+        return;
+      }
+      
+      try {
+        generateTextureBtn.disabled = true;
+        generateTextureBtn.innerHTML = '<span class="loading"></span> Generating...';
+        
+        // Append instruction for repeatable texture
+        const fullPrompt = `${eggPrompt.value.trim()} - This image is to be a repeatable texture for an Easter egg.`;
+        
+        // Call LLM to generate image
+        const result = await websim.imageGen({
+          prompt: fullPrompt,
+          aspect_ratio: "1:1"
+        });
+        
+        // Display the generated texture
+        eggPreview.innerHTML = `<img src="${result.url}" class="egg-image" alt="Generated Egg Texture">`;
+        
+        // Store the texture URL
+        gameState.currentEgg = { textureUrl: result.url };
+        
+        // Show save button
+        saveEggBtn.style.display = 'inline-block';
+      } catch (error) {
+        console.error('Error generating texture:', error);
+        showNotification('Failed to generate texture. Please try again.');
+      } finally {
+        generateTextureBtn.disabled = false;
+        generateTextureBtn.innerHTML = 'Generate Texture';
+      }
+    });
+    
+    saveEggBtn.addEventListener('click', async () => {
+      if (!gameState.currentEgg) return;
+      
+      try {
+        saveEggBtn.disabled = true;
+        saveEggBtn.innerHTML = '<span class="loading"></span> Saving...';
+        
+        // Store egg in database
+        const egg = await room.collection('eggs').create({
+          textureUrl: gameState.currentEgg.textureUrl,
+          description: eggPrompt.value.trim()
+        });
+        
+        // Close the egg creator
+        eggCreator.style.display = 'none';
+        eggPreview.innerHTML = '<span>Your egg texture will appear here</span>';
+        eggPrompt.value = '';
+        saveEggBtn.style.display = 'none';
+        
+        showNotification('Egg created successfully!');
+        
+        // Refresh eggs list
+        loadEggs();
+      } catch (error) {
+        console.error('Error saving egg:', error);
+        showNotification('Failed to save egg. Please try again.');
+      } finally {
+        saveEggBtn.disabled = false;
+        saveEggBtn.innerHTML = 'Save Egg';
+      }
+    });
+    
+    async function loadEggs() {
+      const eggs = await room.collection('eggs').getList();
+      const hiddenEggs = room.roomState.hiddenEggs || {};
+      
+      // Add hidden eggs to the scene
+      Object.keys(hiddenEggs).forEach(async (eggId) => {
+        const hiddenEgg = hiddenEggs[eggId];
+        const egg = eggs.find(e => e.id === eggId);
+        
+        if (egg && !scene.getObjectByName(`egg-${eggId}`)) {
+          const eggModel = await createEggModel(egg.textureUrl);
+          eggModel.position.set(hiddenEgg.x, hiddenEgg.y, hiddenEgg.z);
+          eggModel.name = `egg-${eggId}`;
+          eggModel.userData = { eggId: eggId, placedBy: hiddenEgg.placedBy };
+          scene.add(eggModel);
+        }
+      });
+      
+      // Show hide egg button if there are eggs to hide
+      hideEggBtn.style.display = eggs.length > 0 ? 'block' : 'none';
+    }
+    
+    // Hide egg functionality
+    hideEggBtn.addEventListener('click', async () => {
+      if (gameState.isPlacingEgg) {
+        // Cancel placing
+        if (gameState.selectedEgg) {
+          scene.remove(gameState.selectedEgg);
+          gameState.selectedEgg = null;
+        }
+        
+        gameState.isPlacingEgg = false;
+        hideEggBtn.innerHTML = 'Hide Egg';
+        controls.enabled = true;
+        return;
+      }
+      
+      // Start placing egg
+      const eggs = await room.collection('eggs').getList();
+      
+      if (eggs.length === 0) {
+        showNotification('No eggs available to hide. Create some first!');
+        return;
+      }
+      
+      // Show egg selection UI
+      const eggSelection = document.createElement('div');
+      eggSelection.className = 'panel';
+      eggSelection.style.position = 'absolute';
+      eggSelection.style.top = '50%';
+      eggSelection.style.left = '50%';
+      eggSelection.style.transform = 'translate(-50%, -50%)';
+      eggSelection.style.zIndex = '100';
+      eggSelection.style.width = '300px';
+      eggSelection.style.maxHeight = '400px';
+      eggSelection.style.overflowY = 'auto';
+      eggSelection.innerHTML = `
+        <h3>Select an Egg to Hide</h3>
+        <div id="egg-list"></div>
+        <button id="cancel-selection" class="btn" style="background-color: #f44336; margin-top: 10px;">Cancel</button>
+      `;
+      
+      document.body.appendChild(eggSelection);
+      
+      const eggList = document.getElementById('egg-list');
+      
+      eggs.forEach(egg => {
+        const eggItem = document.createElement('div');
+        eggItem.style.display = 'flex';
+        eggItem.style.alignItems = 'center';
+        eggItem.style.marginBottom = '10px';
+        eggItem.style.cursor = 'pointer';
+        eggItem.style.padding = '5px';
+        eggItem.style.borderRadius = '4px';
+        
+        eggItem.innerHTML = `
+          <img src="${egg.textureUrl}" alt="Egg" style="width: 50px; height: 50px; object-fit: cover; border-radius: 4px; margin-right: 10px;">
+          <div>${egg.description}</div>
+        `;
+        
+        eggItem.addEventListener('click', async () => {
+          document.body.removeChild(eggSelection);
+          
+          // Create egg model
+          const eggModel = await createEggModel(egg.textureUrl);
+          
+          // Position at a random location initially
+          const randomX = (Math.random() - 0.5) * 20;
+          const randomZ = (Math.random() - 0.5) * 20;
+          eggModel.position.set(randomX, 0, randomZ);
+          
+          scene.add(eggModel);
+          gameState.selectedEgg = eggModel;
+          gameState.selectedEggData = egg;
+          gameState.isPlacingEgg = true;
+          
+          hideEggBtn.innerHTML = 'Place Egg';
+          controls.enabled = false;
+          
+          showNotification('Click to place the egg on the ground.');
+        });
+        
+        eggList.appendChild(eggItem);
+      });
+      
+      document.getElementById('cancel-selection').addEventListener('click', () => {
+        document.body.removeChild(eggSelection);
+      });
+    });
+    
+    // Place egg on click
+    renderer.domElement.addEventListener('click', (event) => {
+      if (gameState.isPlacingEgg && gameState.selectedEgg) {
+        // Calculate click position on ground
+        const rect = renderer.domElement.getBoundingClientRect();
+        const x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        const y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+        
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
+        
+        const intersects = raycaster.intersectObject(ground);
+        
+        if (intersects.length > 0) {
+          const point = intersects[0].point;
+          gameState.selectedEgg.position.set(point.x, 0, point.z);
+          
+          // Hide the egg in the room state
+          const hiddenEggs = room.roomState.hiddenEggs || {};
+          hiddenEggs[gameState.selectedEggData.id] = {
+            x: point.x,
+            y: 0,
+            z: point.z,
+            placedBy: room.clientId
+          };
+          
+          room.updateRoomState({ hiddenEggs });
+          
+          // Name the egg for future reference
+          gameState.selectedEgg.name = `egg-${gameState.selectedEggData.id}`;
+          gameState.selectedEgg.userData = { 
+            eggId: gameState.selectedEggData.id,
+            placedBy: room.clientId
+          };
+          
+          // Reset state
+          gameState.selectedEgg = null;
+          gameState.selectedEggData = null;
+          gameState.isPlacingEgg = false;
+          hideEggBtn.innerHTML = 'Hide Egg';
+          controls.enabled = true;
+          
+          showNotification('Egg placed successfully!');
+        }
+      } else {
+        // Check if clicked on an egg to collect it
+        const rect = renderer.domElement.getBoundingClientRect();
+        const x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        const y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+        
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
+        
+        const allEggs = scene.children.filter(obj => obj.name && obj.name.startsWith('egg-'));
+        const intersects = raycaster.intersectObjects(allEggs);
+        
+        if (intersects.length > 0) {
+          const clickedEgg = intersects[0].object;
+          
+          // Check if user is trying to collect their own egg
+          if (clickedEgg.userData.placedBy === room.clientId) {
+            showNotification("You can't collect your own eggs!");
+            return;
+          }
+          
+          // Remove egg from scene and room state
+          scene.remove(clickedEgg);
+          
+          const hiddenEggs = {...room.roomState.hiddenEggs};
+          const eggId = clickedEgg.userData.eggId;
+          
+          if (hiddenEggs[eggId]) {
+            delete hiddenEggs[eggId];
+            room.updateRoomState({ hiddenEggs });
+            
+            // Update score
+            const scores = {...room.roomState.scores} || {};
+            scores[room.clientId] = (scores[room.clientId] || 0) + 1;
+            room.updateRoomState({ scores });
+            
+            showNotification('You found an egg! +1 point');
+          }
+        }
+      }
+    });
+    
+    // Egg finding and scoring
+    function updateLeaderboard() {
+      const leaderboardContent = document.getElementById('leaderboard-content');
+      const scores = room.roomState.scores || {};
+      
+      // Sort players by score
+      const sortedPlayers = Object.entries(scores)
+        .map(([clientId, score]) => {
+          const username = room.peers[clientId]?.username || 'Unknown player';
+          return { clientId, username, score };
+        })
+        .sort((a, b) => b.score - a.score);
+      
+      // Update leaderboard HTML
+      leaderboardContent.innerHTML = sortedPlayers.length > 0 
+        ? sortedPlayers.map((player, index) => 
+          `<div style="display: flex; justify-content: space-between; margin: 5px 0;">
+            <div>${index + 1}. ${player.username}</div>
+            <div>${player.score} egg${player.score !== 1 ? 's' : ''}</div>
+          </div>`
+        ).join('')
+        : '<div>No eggs found yet. Start hunting!</div>';
+    }
+    
+    // Show notification
+    function showNotification(message, duration = 3000) {
+      const notification = document.getElementById('notification');
+      notification.textContent = message;
+      notification.style.opacity = 1;
+      
+      setTimeout(() => {
+        notification.style.opacity = 0;
+      }, duration);
+    }
+    
+    // Subscribe to room state changes
+    room.subscribeRoomState(() => {
+      loadEggs();
+      updateLeaderboard();
+    });
+    
+    // Handle window resize
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+    
+    // Animation loop
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    
+    // Initialize
+    loadEggs();
+    updateLeaderboard();
+    animate();
+  </script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>
+
